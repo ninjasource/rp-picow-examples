@@ -1,4 +1,4 @@
-//! This example sends incomming udp packets to an endpoint depending on the state of input pin GP15. See button example first.
+//! This example receives incomming udp packets and turns an led on or off depending on the payload
 //! In order to connect to the wifi network please create the following two files in the `src` folder:
 //! WIFI_SSID.txt and WIFI_PASSWORD.txt
 //! The files above should contain the exact ssid and password to connect to the wifi network. No newline characters or quotes.
@@ -9,7 +9,7 @@
 //! The pico has a builtin bootloader that can be used as a replacement for a debug probe (like an ST link v2).
 //! Start with the usb cable unplugged then, while holding down the BOOTSEL button, plug it in. Then you can release the button.
 //! Mount the usb drive (this will be enumerated as USB mass storage) then run the following command:
-//! cargo run --bin button_send --release
+//! cargo run --bin 04_button_recv --release
 //!
 //! Troubleshoot:
 //! `Error: "Unable to find mounted pico"`
@@ -21,16 +21,15 @@
 #![no_main]
 
 use cyw43_pio::PioSpi;
-use defmt::*;
 use embassy_executor::Spawner;
 use embassy_net::{
     udp::{PacketMetadata, UdpSocket},
-    IpEndpoint, Ipv4Address, Stack, StackResources,
+    Ipv4Address, Stack, StackResources,
 };
 use embassy_rp::{
     bind_interrupts,
     clocks::RoscRng,
-    gpio::{Input, Level, Output, Pull},
+    gpio::{Level, Output},
     peripherals::{DMA_CH0, PIO0, USB},
     pio::{self, Pio},
     usb::{self, Driver},
@@ -65,12 +64,9 @@ async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    const REMOTE_IP: Ipv4Address = Ipv4Address::new(192, 168, 1, 50);
-    const REMOTE_PORT: u16 = 47900;
-    const LOCAL_IP: Ipv4Address = Ipv4Address::new(192, 168, 1, 49);
-    const LOCAL_PORT: u16 = 47901;
-    const ON: [u8; 1] = [1];
-    const OFF: [u8; 1] = [0];
+    const LOCAL_IP: Ipv4Address = Ipv4Address::new(192, 168, 1, 50);
+    const LOCAL_PORT: u16 = 47900;
+    const ON: u8 = 1;
 
     let p = embassy_rp::init(Default::default());
     let mut rng = RoscRng;
@@ -109,7 +105,7 @@ async fn main(spawner: Spawner) {
     let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
 
     // run the wifi runtime on an async task
-    unwrap!(spawner.spawn(wifi_task(runner)));
+    spawner.spawn(wifi_task(runner)).unwrap();
 
     // set the country locale matrix and power management
     // wifi_task MUST be running before this gets called
@@ -139,17 +135,13 @@ async fn main(spawner: Spawner) {
         seed,
     ));
 
-    unwrap!(spawner.spawn(net_task(stack)));
-
-    // this is GP15 (not the physical chip pin number!)
-    let mut button = Input::new(p.PIN_15, Pull::Up);
+    spawner.spawn(net_task(stack)).unwrap();
 
     // make sure these files exist in your `src` folder
     let wifi_ssid: &str = include_str!("../WIFI_SSID.txt");
     let wifi_password: &str = include_str!("../WIFI_PASSWORD.txt");
 
     loop {
-        //control.join_open(WIFI_NETWORK).await;
         match control.join_wpa2(wifi_ssid, wifi_password).await {
             Ok(_) => break,
             Err(err) => {
@@ -178,28 +170,18 @@ async fn main(spawner: Spawner) {
         &mut tx_buffer,
     );
 
-    let remote_endpoint = IpEndpoint::new(REMOTE_IP.into(), REMOTE_PORT);
     socket.bind(LOCAL_PORT).unwrap();
+    info!("Waiting for udp packets on port {LOCAL_PORT}");
 
+    let mut buf: [u8; 1500] = [0; 1500];
     loop {
-        info!("waiting for button press");
-        button.wait_for_low().await;
-
-        info!("send led on!");
-        socket.send_to(&ON, remote_endpoint).await.unwrap();
-        control.gpio_set(0, true).await;
-
-        // debounce the button
-        Timer::after(Duration::from_millis(100)).await;
-
-        info!("waiting for button release");
-        button.wait_for_high().await;
-
-        info!("send led off!");
-        socket.send_to(&OFF, remote_endpoint).await.unwrap();
-        control.gpio_set(0, false).await;
-
-        // debounce the button
-        Timer::after(Duration::from_millis(100)).await;
+        let (len, meta) = socket.recv_from(&mut buf).await.unwrap();
+        if len == 1 {
+            let on = buf[0] == ON;
+            info!("Received {} from {:?}", on, meta);
+            control.gpio_set(0, on).await;
+        } else {
+            info!("Received {} bytes from {:?}", len, meta.endpoint);
+        }
     }
 }

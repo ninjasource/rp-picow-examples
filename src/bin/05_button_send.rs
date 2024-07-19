@@ -1,4 +1,7 @@
-//! This example tests the RP Pico W on board LED which it turns on if pin GP_15 is connected to GND
+//! This example sends incomming udp packets to an endpoint depending on the state of input pin GP15. See button example first.
+//! In order to connect to the wifi network please create the following two files in the `src` folder:
+//! WIFI_SSID.txt and WIFI_PASSWORD.txt
+//! The files above should contain the exact ssid and password to connect to the wifi network. No newline characters or quotes.
 //!
 //! This example is for a RP Pico W or PR Pico WH. It does not work with the RP Pico board (non-wifi).
 //!
@@ -6,7 +9,7 @@
 //! The pico has a builtin bootloader that can be used as a replacement for a debug probe (like an ST link v2).
 //! Start with the usb cable unplugged then, while holding down the BOOTSEL button, plug it in. Then you can release the button.
 //! Mount the usb drive (this will be enumerated as USB mass storage) then run the following command:
-//! cargo run --bin button --release
+//! cargo run --bin 05_button_send --release
 //!
 //! Troubleshoot:
 //! `Error: "Unable to find mounted pico"`
@@ -18,10 +21,14 @@
 #![no_main]
 
 use cyw43_pio::PioSpi;
-use defmt::*;
 use embassy_executor::Spawner;
+use embassy_net::{
+    udp::{PacketMetadata, UdpSocket},
+    IpEndpoint, Ipv4Address, Stack, StackResources,
+};
 use embassy_rp::{
     bind_interrupts,
+    clocks::RoscRng,
     gpio::{Input, Level, Output, Pull},
     peripherals::{DMA_CH0, PIO0, USB},
     pio::{self, Pio},
@@ -29,6 +36,7 @@ use embassy_rp::{
 };
 use embassy_time::{Duration, Timer};
 use log::info;
+use rand::RngCore;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -49,9 +57,22 @@ async fn logger_task(driver: Driver<'static, USB>) {
     embassy_usb_logger::run!(1024, log::LevelFilter::Info, driver);
 }
 
+#[embassy_executor::task]
+async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
+    stack.run().await
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    const REMOTE_IP: Ipv4Address = Ipv4Address::new(192, 168, 1, 50);
+    const REMOTE_PORT: u16 = 47900;
+    const LOCAL_IP: Ipv4Address = Ipv4Address::new(192, 168, 1, 49);
+    const LOCAL_PORT: u16 = 47901;
+    const ON: [u8; 1] = [1];
+    const OFF: [u8; 1] = [0];
+
     let p = embassy_rp::init(Default::default());
+    let mut rng = RoscRng;
 
     // setup logging over usb serial port
     let driver = Driver::new(p.USB, Irqs);
@@ -84,10 +105,10 @@ async fn main(spawner: Spawner) {
     // setup network buffers and init the modem
     static STATE: StaticCell<cyw43::State> = StaticCell::new();
     let state = STATE.init(cyw43::State::new());
-    let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
+    let (net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
 
     // run the wifi runtime on an async task
-    unwrap!(spawner.spawn(wifi_task(runner)));
+    spawner.spawn(wifi_task(runner)).unwrap();
 
     // set the country locale matrix and power management
     // wifi_task MUST be running before this gets called
@@ -97,14 +118,74 @@ async fn main(spawner: Spawner) {
         .await;
     info!("wifi module setup complete");
 
+    //let config = embassy_net::Config::dhcpv4(Default::default());
+    let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
+        address: embassy_net::Ipv4Cidr::new(LOCAL_IP, 24),
+        dns_servers: heapless::Vec::new(),
+        gateway: None,
+    });
+
+    // Generate random seed
+    let seed = rng.next_u64();
+
+    // Init network stack
+    static STACK: StaticCell<Stack<cyw43::NetDriver<'static>>> = StaticCell::new();
+    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
+    let stack = &*STACK.init(Stack::new(
+        net_device,
+        config,
+        RESOURCES.init(StackResources::<2>::new()),
+        seed,
+    ));
+
+    spawner.spawn(net_task(stack)).unwrap();
+
     // this is GP15 (not the physical chip pin number!)
     let mut button = Input::new(p.PIN_15, Pull::Up);
+
+    // make sure these files exist in your `src` folder
+    let wifi_ssid: &str = include_str!("../WIFI_SSID.txt");
+    let wifi_password: &str = include_str!("../WIFI_PASSWORD.txt");
+
+    loop {
+        //control.join_open(WIFI_NETWORK).await;
+        match control.join_wpa2(wifi_ssid, wifi_password).await {
+            Ok(_) => break,
+            Err(err) => {
+                info!("join failed with status={}", err.status);
+            }
+        }
+    }
+    info!("Connected to wifi network");
+
+    info!("waiting for DHCP...");
+    while !stack.is_config_up() {
+        Timer::after_millis(100).await;
+    }
+    info!("DHCP is now up!");
+
+    let mut rx_buffer = [0u8; 4096];
+    let mut tx_buffer = [0u8; 4096];
+    let mut rx_meta = [PacketMetadata::EMPTY; 16];
+    let mut tx_meta = [PacketMetadata::EMPTY; 16];
+
+    let mut socket = UdpSocket::new(
+        stack,
+        &mut rx_meta,
+        &mut rx_buffer,
+        &mut tx_meta,
+        &mut tx_buffer,
+    );
+
+    let remote_endpoint = IpEndpoint::new(REMOTE_IP.into(), REMOTE_PORT);
+    socket.bind(LOCAL_PORT).unwrap();
 
     loop {
         info!("waiting for button press");
         button.wait_for_low().await;
 
-        info!("led on!");
+        info!("send led on!");
+        socket.send_to(&ON, remote_endpoint).await.unwrap();
         control.gpio_set(0, true).await;
 
         // debounce the button
@@ -113,7 +194,8 @@ async fn main(spawner: Spawner) {
         info!("waiting for button release");
         button.wait_for_high().await;
 
-        info!("led off!");
+        info!("send led off!");
+        socket.send_to(&OFF, remote_endpoint).await.unwrap();
         control.gpio_set(0, false).await;
 
         // debounce the button

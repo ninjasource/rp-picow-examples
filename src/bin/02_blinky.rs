@@ -1,4 +1,4 @@
-//! Start here. This example tests the RP Pico W on board LED and USB serial port logging.
+//! This example tests the RP Pico W on board LED and USB serial port logging.
 //!
 //! This example is for a RP Pico W or PR Pico WH. It does not work with the RP Pico board (non-wifi).
 //!
@@ -6,7 +6,7 @@
 //! The pico has a builtin bootloader that can be used as a replacement for a debug probe (like an ST link v2).
 //! Start with the usb cable unplugged then, while holding down the BOOTSEL button, plug it in. Then you can release the button.
 //! Mount the usb drive (this will be enumerated as USB mass storage) then run the following command:
-//! cargo run --bin blinky --release
+//! cargo run --bin 02_blinky --release
 //!
 //! Why is it so complicated for a blinky? The led is physically connected to the wifi chip which is separate from the rp2040 mcu.
 //! Therefore the wifi chip needs to be setup first and that is quite a procedure because we need to load its firmware and set the country locale martix.
@@ -24,7 +24,6 @@
 #![no_main]
 
 use cyw43_pio::PioSpi;
-use defmt::*;
 use embassy_executor::Spawner;
 use embassy_rp::{
     bind_interrupts,
@@ -93,7 +92,7 @@ async fn main(spawner: Spawner) {
     let (_net_device, mut control, runner) = cyw43::new(state, pwr, spi, fw).await;
 
     // run the wifi runtime on an async task
-    unwrap!(spawner.spawn(wifi_task(runner)));
+    spawner.spawn(wifi_task(runner)).unwrap();
 
     // set the country locale matrix and power management
     // wifi_task MUST be running before this gets called
