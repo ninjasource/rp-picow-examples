@@ -20,11 +20,12 @@
 #![no_std]
 #![no_main]
 
-use cyw43_pio::PioSpi;
+use cyw43::JoinOptions;
+use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 use embassy_executor::Spawner;
 use embassy_net::{
     udp::{PacketMetadata, UdpSocket},
-    IpEndpoint, Ipv4Address, Stack, StackResources,
+    IpEndpoint, Ipv4Address, StackResources,
 };
 use embassy_rp::{
     bind_interrupts,
@@ -58,8 +59,8 @@ async fn logger_task(driver: Driver<'static, USB>) {
 }
 
 #[embassy_executor::task]
-async fn net_task(stack: &'static Stack<cyw43::NetDriver<'static>>) -> ! {
-    stack.run().await
+async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'static>>) -> ! {
+    runner.run().await
 }
 
 #[embassy_executor::main]
@@ -95,6 +96,7 @@ async fn main(spawner: Spawner) {
     let spi = PioSpi::new(
         &mut pio.common,
         pio.sm0,
+        DEFAULT_CLOCK_DIVIDER,
         pio.irq0,
         cs,
         p.PIN_24,
@@ -129,16 +131,15 @@ async fn main(spawner: Spawner) {
     let seed = rng.next_u64();
 
     // Init network stack
-    static STACK: StaticCell<Stack<cyw43::NetDriver<'static>>> = StaticCell::new();
-    static RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
-    let stack = &*STACK.init(Stack::new(
+    static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
+    let (stack, runner) = embassy_net::new(
         net_device,
         config,
-        RESOURCES.init(StackResources::<2>::new()),
+        RESOURCES.init(StackResources::new()),
         seed,
-    ));
+    );
 
-    spawner.spawn(net_task(stack)).unwrap();
+    spawner.spawn(net_task(runner)).unwrap();
 
     // this is GP15 (not the physical chip pin number!)
     let mut button = Input::new(p.PIN_15, Pull::Up);
@@ -147,16 +148,18 @@ async fn main(spawner: Spawner) {
     let wifi_ssid: &str = include_str!("../WIFI_SSID.txt");
     let wifi_password: &str = include_str!("../WIFI_PASSWORD.txt");
 
+    info!("connecting to wifi network '{}'", wifi_ssid);
+
     loop {
-        //control.join_open(WIFI_NETWORK).await;
-        match control.join_wpa2(wifi_ssid, wifi_password).await {
+        let options = JoinOptions::new(wifi_password.as_bytes());
+        match control.join(wifi_ssid, options).await {
             Ok(_) => break,
             Err(err) => {
                 info!("join failed with status={}", err.status);
             }
         }
     }
-    info!("Connected to wifi network");
+    info!("connected to wifi network");
 
     info!("waiting for DHCP...");
     while !stack.is_config_up() {
