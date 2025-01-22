@@ -9,11 +9,11 @@ rustflags = [
     #    "-C",
     #    "link-arg=-Tdefmt.x",
 ]
-#runner = "elf2uf2-rs --deploy --serial --verbose"
+runner = "elf2uf2-rs --deploy --serial --verbose"
 #runner = "probe-rs run --chip RP2040_SELFDEBUG"
 #runner = "probe-rs run --chip RP2040"
 #runner = "probe-rs run --chip RP2040 --protocol swd"
-runner = "probe-rs run --chip RP2040_SELFDEBUG --protocol swd"
+#runner = "probe-rs run --chip RP2040_SELFDEBUG --protocol swd"
 
 [build]
 target = "thumbv6m-none-eabi" # Cortex-M0 and Cortex-M0+
