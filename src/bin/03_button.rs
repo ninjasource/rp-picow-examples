@@ -28,8 +28,8 @@ use embassy_rp::{
 };
 use embassy_time::{Duration, Timer};
 use log::info;
+use panic_halt as _;
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;

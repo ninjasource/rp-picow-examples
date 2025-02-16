@@ -24,7 +24,7 @@ use embassy_rp::{
 };
 use embassy_time::{Duration, Timer};
 use log::info;
-use {defmt_rtt as _, panic_probe as _};
+use panic_halt as _;
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
