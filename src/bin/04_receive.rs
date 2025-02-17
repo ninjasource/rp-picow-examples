@@ -1,4 +1,7 @@
-//! This example tests the RP Pico W on board LED and USB serial port logging.
+//! This example receives incomming udp packets and turns an led on or off depending on the payload
+//! In order to connect to the wifi network please create the following two files in the `src` folder:
+//! WIFI_SSID.txt and WIFI_PASSWORD.txt
+//! The files above should contain the exact ssid and password to connect to the wifi network. No newline characters or quotes.
 //!
 //! This example is for a RP Pico W or PR Pico WH. It does not work with the RP Pico board (non-wifi).
 //!
@@ -6,13 +9,7 @@
 //! The pico has a builtin bootloader that can be used as a replacement for a debug probe (like an ST link v2).
 //! Start with the usb cable unplugged then, while holding down the BOOTSEL button, plug it in. Then you can release the button.
 //! Mount the usb drive (this will be enumerated as USB mass storage) then run the following command:
-//! cargo run --bin 02_blinky --release
-//!
-//! Why is it so complicated for a blinky? The led is physically connected to the wifi chip which is separate from the rp2040 mcu.
-//! Therefore the wifi chip needs to be setup first and that is quite a procedure because we need to load its firmware and set the country locale martix.
-//! We also need to setup the wifi task.
-//! Other things that complicate this board are the fact that if you want to use the bootloader you beed to convert from elf to uf2 format using the elf2uf2-rs tool
-//! The pico bootloader enumerates the USB device as a USB serial port is the button is not pressed on startup, otherwise as a USB mass storage device allowing you to copy firmware onto it.
+//! cargo run --bin 04_button_recv --release
 //!
 //! Troubleshoot:
 //! `Error: "Unable to find mounted pico"`
@@ -24,33 +21,34 @@
 #![no_std]
 #![no_main]
 
+use core::str::{from_utf8, FromStr};
+
 use cyw43_pio::{PioSpi, DEFAULT_CLOCK_DIVIDER};
 use embassy_executor::Spawner;
+use embassy_net::Ipv4Address;
 use embassy_rp::{
     bind_interrupts,
     gpio::{Level, Output},
-    peripherals::{DMA_CH0, PIO0, USB},
+    peripherals::{PIO0, USB},
     pio::{self, Pio},
     usb::{self},
 };
 use embassy_time::{Duration, Timer};
-use log::info;
-use rp_picow_examples::{self as _, logging::setup_logging, radio::setup_radio};
+use log::{info, warn};
+use rp_picow_examples::{
+    self as _, logging::setup_logging, network::setup_network, radio::setup_radio,
+};
 
 bind_interrupts!(struct Irqs {
     USBCTRL_IRQ => usb::InterruptHandler<USB>;
     PIO0_IRQ_0 => pio::InterruptHandler<PIO0>;
 });
 
-#[embassy_executor::task]
-async fn wifi_task(
-    runner: cyw43::Runner<'static, Output<'static>, PioSpi<'static, PIO0, 0, DMA_CH0>>,
-) -> ! {
-    runner.run().await
-}
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    const LOCAL_PORT: u16 = 47900;
+    let local_ip = Ipv4Address::from_str(include_str!("../LOCAL_IP.txt")).ok();
+
     let p = embassy_rp::init(Default::default());
 
     // setup logging over usb serial port
@@ -75,16 +73,24 @@ async fn main(spawner: Spawner) {
         p.PIN_29,
         p.DMA_CH0,
     );
-    let (_net_device, mut control) = setup_radio(&spawner, pwr, spi).await;
+    let (net_device, mut control) = setup_radio(&spawner, pwr, spi).await;
 
-    let delay = Duration::from_secs(1);
+    let socket = setup_network(&spawner, net_device, &mut control, local_ip, LOCAL_PORT).await;
+    info!("waiting for udp packets on port {LOCAL_PORT}");
+
+    let mut buf: [u8; 1500] = [0; 1500];
     loop {
-        info!("led on!");
-        control.gpio_set(0, true).await;
-        Timer::after(delay).await;
-
-        info!("led off!");
-        control.gpio_set(0, false).await;
-        Timer::after(delay).await;
+        let (len, meta) = socket.recv_from(&mut buf).await.unwrap();
+        match from_utf8(&buf[..len]) {
+            Ok(s) => {
+                info!("received '{}' from {:?}", s, meta);
+                match s {
+                    "on" => control.gpio_set(0, true).await,
+                    "off" => control.gpio_set(0, false).await,
+                    _ => warn!("unknown command received"),
+                }
+            }
+            Err(e) => warn!("received {} bytes from {:?}: {:?}", len, meta, e),
+        }
     }
 }

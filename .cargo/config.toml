@@ -7,11 +7,8 @@ rustflags = [
     "-C",
     "link-arg=-Tlink-rp.x",
 ]
-runner = "elf2uf2-rs --deploy --serial --term --verbose"
-#runner = "probe-rs run --chip RP2040_SELFDEBUG"
-#runner = "probe-rs run --chip RP2040"
-#runner = "probe-rs run --chip RP2040 --protocol swd"
-#runner = "probe-rs run --chip RP2040_SELFDEBUG --protocol swd"
+#runner = "elf2uf2-rs --deploy --serial --term"
+runner = "./run-automount.sh"
 
 [build]
 target = "thumbv6m-none-eabi" # Cortex-M0 and Cortex-M0+
