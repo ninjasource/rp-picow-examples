@@ -10,7 +10,7 @@
 //! Troubleshoot:
 //! `Error: "Unable to find mounted pico"`
 //! This is because the pico is not in bootloader mode. You need to press down the BOOTSEL button when you plug it in and then release the button.
-//! Then, if your're on linux, you need to mount the drive (click on it in your explorer and it should mount automatically). 
+//! Then, if your're on linux, you need to mount the drive (click on it in your explorer and it should mount automatically).
 //! Or run `run-automount.sh` to do it (see `.cargo//config.toml`)
 //! Pressing CTRL+C or q in the terminal will terminate the program and restart the picow in boot mode
 
@@ -45,7 +45,7 @@ async fn main(spawner: Spawner) {
 
     let mut counter = 0;
     loop {
-        info!("county: {}", counter);
+        info!("count: {}", counter);
         counter += 1;
         Timer::after(Duration::from_secs(1)).await;
     }

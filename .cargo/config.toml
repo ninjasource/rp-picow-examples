@@ -7,8 +7,8 @@ rustflags = [
     "-C",
     "link-arg=-Tlink-rp.x",
 ]
-#runner = "elf2uf2-rs --deploy --serial --term"
-runner = "./run-automount.sh"
+runner = "elf2uf2-rs --deploy --serial --term"
+#runner = "./run-automount.sh"
 
 [build]
 target = "thumbv6m-none-eabi" # Cortex-M0 and Cortex-M0+
